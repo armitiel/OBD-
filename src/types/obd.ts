@@ -48,3 +48,70 @@ export interface DiagnosticPlan {
   pids: string[];
   durationSeconds: number;
 }
+
+// ─── Recorder sesji pomiarowej ──────────────────────────────────────────────
+
+export interface VehicleProfile {
+  make: string;
+  model: string;
+  engine: string;
+}
+
+export type TestType = 'stationary' | 'road';
+
+export interface TestConditions {
+  engineWarm: boolean;
+  testType: TestType;
+  notes: string;
+}
+
+/** Jedna próbka: czas od startu sesji w ms i wartości liczbowe per PID. */
+export interface ObdSample {
+  t: number;
+  values: Record<string, number>;
+}
+
+export interface PidStat {
+  pid: string;
+  label: string;
+  unit: string;
+  min: number;
+  max: number;
+  avg: number;
+  count: number;
+}
+
+export interface ObdSession {
+  schemaVersion: 1;
+  sessionId: string;
+  vehicle: VehicleProfile;
+  symptoms: string;
+  conditions: TestConditions;
+  plan: DiagnosticPlan;
+  startedAt: string;
+  endedAt: string | null;
+  samples: ObdSample[];
+  /** Powody zakończenia, utraty PID-ów, błędy — bez surowego tekstu terminala. */
+  events: { t: number; kind: 'info' | 'error'; text: string }[];
+}
+
+export interface DiagnosisReport {
+  summary: string;
+  confidence: 'low' | 'medium' | 'high';
+  findings: string[];
+  likelyCauses: string[];
+  nextChecks: string[];
+  safetyNote: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  basedOnData?: boolean;
+}
+
+export interface ChatAnswer {
+  answer: string;
+  basedOnData: boolean;
+  followUps: string[];
+}

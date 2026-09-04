@@ -1,15 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionPanel } from './components/ConnectionPanel';
 import { AiPlannerPanel } from './components/AiPlannerPanel';
 import { EcuStatus } from './components/EcuStatus';
 import { LiveDataPanel } from './components/LiveDataPanel';
+import { SessionReportPanel } from './components/SessionReportPanel';
+import { DataChatPanel } from './components/DataChatPanel';
 import { Terminal } from './components/Terminal';
 import { obdBluetooth } from './services/obdBluetooth';
-import { ALLOWED_LIVE_PIDS, BASELINE_DIAGNOSTIC_PLAN, requestDiagnosticPlan } from './services/diagnosticPlanner';
+import {
+  ALLOWED_LIVE_PIDS, BASELINE_DIAGNOSTIC_PLAN, DEFAULT_BACKEND_URL,
+  checkBackend, requestChat, requestDiagnosis, requestDiagnosticPlan,
+} from './services/diagnosticPlanner';
+import type { BackendHealth } from './services/diagnosticPlanner';
+import {
+  DEFAULT_CONDITIONS, REFERENCE_VEHICLE, appendBatch, appendEvent, buildAiPayload,
+  computeStats, createSession, finishSession, loadSession, persistSession, shareSessionJson,
+} from './services/sessionRecorder';
 import { loadSavedLog, persistLog, shareTestLog } from './services/testLog';
-import type { BluetoothDevice, ConnectionState, DiagnosticPlan, LiveDataBatch, ObdSnapshot, TerminalLine } from './types/obd';
+import type {
+  BluetoothDevice, ChatMessage, ConnectionState, DiagnosisReport, DiagnosticPlan,
+  LiveDataBatch, ObdSession, ObdSnapshot, TerminalLine, TestConditions,
+} from './types/obd';
 
 const LAST_DEVICE_KEY = 'obd-ai-last-device';
+const ENDPOINT_KEY = 'obd-ai-backend-url';
+const TOKEN_KEY = 'obd-ai-backend-token';
+const SYMPTOMS_KEY = 'obd-ai-symptoms';
+/** Co ile paczek zapisujemy sesję na dysk — kompromis między bezpieczeństwem a kosztem. */
+const PERSIST_EVERY = 20;
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -27,14 +45,37 @@ export default function App() {
   const [diagnosticPlan, setDiagnosticPlan] = useState<DiagnosticPlan>(BASELINE_DIAGNOSTIC_PLAN);
   const [plannerBusy, setPlannerBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  const [symptoms, setSymptoms] = useState(() => window.localStorage.getItem(SYMPTOMS_KEY) || '');
+  const [conditions, setConditions] = useState<TestConditions>(DEFAULT_CONDITIONS);
+  const [endpoint, setEndpoint] = useState(() => window.localStorage.getItem(ENDPOINT_KEY) || DEFAULT_BACKEND_URL);
+  const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_KEY) || '');
+  const [health, setHealth] = useState<BackendHealth | null>(null);
+  const [healthError, setHealthError] = useState('');
+
+  const [session, setSession] = useState<ObdSession | null>(loadSession);
+  const [report, setReport] = useState<DiagnosisReport | null>(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [sessionExporting, setSessionExporting] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatFollowUps, setChatFollowUps] = useState<string[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+
   const nextLineId = useRef(lines.reduce((highest, line) => Math.max(highest, line.id), 0) + 1);
   const liveRunId = useRef(0);
+  const sessionRef = useRef<ObdSession | null>(session);
+  const labelsRef = useRef(new Map<string, { label: string; unit: string }>());
 
   const addLine = useCallback((direction: TerminalLine['direction'], text: string) => {
     setLines((current) => [...current.slice(-1999), { id: nextLineId.current++, direction, text, timestamp: new Date() }]);
   }, []);
 
   useEffect(() => { persistLog(lines); }, [lines]);
+  useEffect(() => { window.localStorage.setItem(ENDPOINT_KEY, endpoint); }, [endpoint]);
+  useEffect(() => { window.localStorage.setItem(TOKEN_KEY, token); }, [token]);
+  useEffect(() => { window.localStorage.setItem(SYMPTOMS_KEY, symptoms); }, [symptoms]);
+
+  const stats = useMemo(() => (session ? computeStats(session, labelsRef.current) : []), [session]);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -58,11 +99,16 @@ export default function App() {
   useEffect(() => { void refreshDevices(); }, [refreshDevices]);
   useEffect(() => () => { liveRunId.current += 1; }, []);
 
-  const stopLiveData = useCallback((writeLog = true) => {
+  const stopLiveData = useCallback((reason = '') => {
     const wasRunning = liveRunId.current > 0;
     liveRunId.current += 1;
     setLiveRunning(false);
-    if (writeLog && wasRunning) addLine('info', 'Live Data zatrzymane.');
+    if (sessionRef.current && !sessionRef.current.endedAt) {
+      sessionRef.current = finishSession(sessionRef.current);
+      persistSession(sessionRef.current);
+      setSession(sessionRef.current);
+    }
+    if (reason && wasRunning) addLine('info', reason);
   }, [addLine]);
 
   const connect = async () => {
@@ -94,7 +140,7 @@ export default function App() {
   };
 
   const disconnect = async () => {
-    stopLiveData(false);
+    stopLiveData();
     setBusy(true);
     try {
       await obdBluetooth.disconnect();
@@ -142,39 +188,66 @@ export default function App() {
     const runId = liveRunId.current + 1;
     liveRunId.current = runId;
     setLiveRunning(true);
-    addLine('info', 'Live Data uruchomione · odczyt wyłącznie bezpiecznych PID-ów trybu 01.');
+
+    const startedAtMs = Date.now();
+    const limitMs = diagnosticPlan.durationSeconds * 1000;
+    sessionRef.current = createSession(diagnosticPlan, symptoms.trim(), conditions);
+    setSession(sessionRef.current);
+    setReport(null);
+    setChatMessages([]);
+    setChatFollowUps([]);
+    persistSession(sessionRef.current);
+    addLine('info', `Live Data uruchomione · plan „${diagnosticPlan.title}" · automatyczny koniec po ${diagnosticPlan.durationSeconds} s.`);
+
+    let batchCount = 0;
 
     while (liveRunId.current === runId) {
       try {
         const batch = await obdBluetooth.readLiveData(diagnosticPlan.pids);
         if (liveRunId.current !== runId) break;
+
         setLiveBatch(batch);
+        for (const reading of batch.readings) {
+          if (!labelsRef.current.has(reading.pid)) labelsRef.current.set(reading.pid, { label: reading.label, unit: reading.unit });
+        }
+        if (sessionRef.current) {
+          sessionRef.current = appendBatch(sessionRef.current, batch, startedAtMs);
+          setSession(sessionRef.current);
+          batchCount += 1;
+          if (batchCount % PERSIST_EVERY === 0) persistSession(sessionRef.current);
+        }
+
         const speed = batch.durationMs > 0 ? (batch.readings.length * 1000 / batch.durationMs).toFixed(1) : '—';
         const values = batch.readings.map((reading) => `${reading.pid}=${reading.formatted}`).join(' | ');
         addLine('rx', `LIVE · ${values || 'brak danych'} · ${speed} PID/s`);
+
+        if (Date.now() - startedAtMs >= limitMs) {
+          stopLiveData(`Pomiar zakończony automatycznie po ${diagnosticPlan.durationSeconds} s · ${sessionRef.current?.samples.length ?? 0} próbek.`);
+          break;
+        }
         await new Promise((resolve) => window.setTimeout(resolve, 250));
       } catch (error) {
         if (liveRunId.current === runId) {
-          liveRunId.current += 1;
-          setLiveRunning(false);
-          addLine('error', `Live Data: ${formatError(error)}`);
+          if (sessionRef.current) sessionRef.current = appendEvent(sessionRef.current, 'error', formatError(error), startedAtMs);
+          stopLiveData(`Live Data przerwane: ${formatError(error)}`);
         }
         break;
       }
     }
   };
 
-  const createDiagnosticPlan = async (endpoint: string, symptoms: string) => {
+  const createDiagnosticPlan = async () => {
     setPlannerBusy(true);
-    addLine('info', `AI: przygotowanie planu dla objawu „${symptoms}”.`);
+    const description = symptoms.trim();
+    addLine('info', `AI: przygotowanie planu dla objawu „${description}".`);
     try {
       const plan = await requestDiagnosticPlan(endpoint, {
-        vehicle: { make: 'Saab', model: '9-3', engine: 'B284 2.8T' },
-        symptoms,
+        vehicle: REFERENCE_VEHICLE,
+        symptoms: description,
         availablePids: [...ALLOWED_LIVE_PIDS],
-      });
+      }, token);
       setDiagnosticPlan(plan);
-      addLine('info', `AI wybrało plan „${plan.title}”: ${plan.pids.join(', ')} · ${plan.durationSeconds} s.`);
+      addLine('info', `AI wybrało plan „${plan.title}": ${plan.pids.join(', ')} · ${plan.durationSeconds} s.`);
     } catch (error) {
       addLine('error', `Plan AI: ${formatError(error)}`);
     } finally {
@@ -182,8 +255,74 @@ export default function App() {
     }
   };
 
+  const verifyBackend = async () => {
+    setHealthError('');
+    setHealth(null);
+    try {
+      setHealth(await checkBackend(endpoint, token));
+    } catch (error) {
+      setHealthError(formatError(error));
+    }
+  };
+
+  const analyzeSession = async () => {
+    if (!session) return;
+    setAnalysisBusy(true);
+    addLine('info', 'AI: analiza zakończonego pomiaru.');
+    try {
+      const result = await requestDiagnosis(endpoint, buildAiPayload(finishSession(session), stats), token);
+      setReport(result);
+      addLine('info', `AI: raport gotowy · pewność ${result.confidence}.`);
+    } catch (error) {
+      addLine('error', `Analiza AI: ${formatError(error)}`);
+    } finally {
+      setAnalysisBusy(false);
+    }
+  };
+
+  const askAboutData = async (question: string) => {
+    if (!session) return;
+    const history = [...chatMessages, { role: 'user' as const, content: question }];
+    setChatMessages(history);
+    setChatFollowUps([]);
+    setChatBusy(true);
+    try {
+      const answer = await requestChat(endpoint, buildAiPayload(session, stats), report, chatMessages, question, token);
+      setChatMessages([...history, { role: 'assistant', content: answer.answer, basedOnData: answer.basedOnData }]);
+      setChatFollowUps(answer.followUps);
+    } catch (error) {
+      setChatMessages([...history, { role: 'assistant', content: `Nie udało się uzyskać odpowiedzi: ${formatError(error)}` }]);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const exportSession = async () => {
+    if (!session) return;
+    setSessionExporting(true);
+    try {
+      const fileName = await shareSessionJson(session, stats);
+      addLine('info', `Zapisano sesję: ${fileName}`);
+    } catch (error) {
+      addLine('error', `Eksport sesji: ${formatError(error)}`);
+    } finally {
+      setSessionExporting(false);
+    }
+  };
+
+  const discardSession = () => {
+    sessionRef.current = null;
+    setSession(null);
+    setReport(null);
+    setChatMessages([]);
+    setChatFollowUps([]);
+    persistSession(null);
+    addLine('info', 'Sesja pomiarowa odrzucona.');
+  };
+
   const connected = connectionState === 'connected' || connectionState === 'ready';
   const selectedDevice = devices.find((device) => device.address === selectedAddress);
+  const sessionFinished = Boolean(session && session.endedAt && session.samples.length > 0);
 
   const exportLog = async () => {
     setExporting(true);
@@ -211,8 +350,42 @@ export default function App() {
         <div className="primary-column">
           <ConnectionPanel devices={devices} selectedAddress={selectedAddress} state={connectionState} busy={busy} onSelect={(address) => { setSelectedAddress(address); window.localStorage.setItem(LAST_DEVICE_KEY, address); }} onRefresh={() => void refreshDevices()} onConnect={() => void connect()} onDisconnect={() => void disconnect()} />
           <EcuStatus snapshot={snapshot} enabled={connected && !liveRunning} busy={busy || liveRunning} onScan={() => void scan()} />
-          <AiPlannerPanel plan={diagnosticPlan} busy={plannerBusy || liveRunning} onRequest={createDiagnosticPlan} />
-          <LiveDataPanel batch={liveBatch} enabled={connectionState === 'ready' && !busy} running={liveRunning} onToggle={() => { if (liveRunning) stopLiveData(); else void startLiveData(); }} />
+          <AiPlannerPanel
+            plan={diagnosticPlan}
+            busy={plannerBusy || liveRunning}
+            symptoms={symptoms}
+            conditions={conditions}
+            endpoint={endpoint}
+            token={token}
+            health={health}
+            healthError={healthError}
+            onSymptomsChange={setSymptoms}
+            onConditionsChange={setConditions}
+            onEndpointChange={setEndpoint}
+            onTokenChange={setToken}
+            onCheckBackend={() => void verifyBackend()}
+            onRequest={() => void createDiagnosticPlan()}
+          />
+          <LiveDataPanel batch={liveBatch} enabled={connectionState === 'ready' && !busy} running={liveRunning} onToggle={() => { if (liveRunning) stopLiveData('Live Data zatrzymane ręcznie.'); else void startLiveData(); }} />
+          <SessionReportPanel
+            session={session}
+            stats={stats}
+            report={report}
+            busy={analysisBusy}
+            exporting={sessionExporting}
+            recording={liveRunning}
+            onAnalyze={() => void analyzeSession()}
+            onExport={() => void exportSession()}
+            onDiscard={discardSession}
+          />
+          <DataChatPanel
+            messages={chatMessages}
+            followUps={chatFollowUps}
+            enabled={sessionFinished}
+            busy={chatBusy}
+            onAsk={(question) => void askAboutData(question)}
+            onClear={() => { setChatMessages([]); setChatFollowUps([]); }}
+          />
         </div>
         <Terminal lines={lines} enabled={connected && !liveRunning} busy={busy || liveRunning} exporting={exporting} onSend={(command) => void sendCommand(command)} onClear={() => setLines([])} onExport={() => void exportLog()} />
       </div>
