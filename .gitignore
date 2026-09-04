@@ -21,3 +21,7 @@ android/build/
 android/app/release/
 android/captures/
 .cxx/
+
+# Katalogi robocze (klaster testowy PostgreSQL, tymczasowe pliki gita)
+work/
+_git_tmp/
