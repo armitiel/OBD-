@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.idea/
+.gradle/
+android/.gradle/
+android/local.properties
+android/app/build/
+*.iml
+*.keystore
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local
+
+# Artefakty wydań — binaria trzymamy poza repozytorium
+outputs/*.apk
+outputs/*.zip
+
+# Dodatkowe katalogi budowania Androida
+android/build/
+android/app/release/
+android/captures/
+.cxx/

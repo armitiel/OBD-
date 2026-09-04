@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://obd-ai.local/schemas/diagnosis-v1.json",
+  "title": "DiagnosticReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "confidence", "observations", "hypotheses", "nextChecks", "safetyNote", "evidenceClaimIds"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1500 },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "observations": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 500 }
+    },
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "confidence", "supportingObservationIndexes"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 300 },
+          "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+          "supportingObservationIndexes": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "nextChecks": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 500 }
+    },
+    "safetyNote": { "type": "string", "maxLength": 800 },
+    "evidenceClaimIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "format": "uuid" }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://obd-ai.local/schemas/diagnostic-plan-v1.json",
+  "title": "DiagnosticPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "reason", "pids", "durationSeconds"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "pids": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 15,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["0104", "0105", "0106", "0107", "0108", "0109", "010B", "010C", "010D", "010E", "010F", "0110", "0111", "0133", "0142"]
+      }
+    },
+    "durationSeconds": { "type": "integer", "minimum": 15, "maximum": 300 }
+  }
+}

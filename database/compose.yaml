@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: obd_ai
+      POSTGRES_USER: obd_ai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-obd_ai_dev_only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - obd_ai_postgres:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obd_ai -d obd_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  obd_ai_postgres:
