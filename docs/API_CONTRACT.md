@@ -1,6 +1,9 @@
 # Kontrakt backendu AI
 
-Bazowy URL w środowisku deweloperskim: `http://127.0.0.1:8787` przez `adb reverse`. Produkcja: wyłącznie HTTPS.
+Produkcja: `https://obd-murex.vercel.app/api` — funkcje serverless z katalogu `api/`.
+Rozwój lokalny: `http://127.0.0.1:8787` przez `adb reverse`; ten sam serwer akceptuje ścieżki z prefiksem `/api` i bez niego, więc adres backendu w aplikacji działa w obu środowiskach.
+
+Jeżeli na backendzie ustawiono `OBD_ACCESS_TOKEN`, każde żądanie musi nieść nagłówek `X-Obd-Token` z tą wartością; bez zmiennej backend jest otwarty (tryb rozwojowy).
 
 ## GET /health
 
@@ -57,7 +60,7 @@ Ograniczenia:
 
 ## POST /v1/diagnosis
 
-Endpoint istnieje w backendzie, ale aplikacja 0.4.0 nie wysyła jeszcze strukturalnego recordera. Docelowe żądanie:
+Analizuje zakończoną sesję. Aplikacja wysyła statystyki per PID oraz przerzedzony szereg czasowy (maksymalnie 120 punktów), nie wszystkie próbki. Żądanie:
 
 ```json
 {
@@ -65,11 +68,16 @@ Endpoint istnieje w backendzie, ale aplikacja 0.4.0 nie wysyła jeszcze struktur
   "vehicle": { "make": "Saab", "model": "9-3", "engine": "B284 2.8T" },
   "symptoms": "Brak mocy pod obciążeniem",
   "conditions": { "engineWarm": true, "testType": "stationary_or_road" },
-  "plan": { "id": "boost-load-v1", "pids": ["010C", "010B", "0110"] },
-  "samples": [
-    { "timestampMs": 0, "values": { "010C": 780, "010B": 31, "0110": 4.8 } }
+  "plan": { "id": "boost-load-v1", "title": "Test pod obciążeniem", "pids": ["010C", "010B", "0110"], "durationSeconds": 90 },
+  "durationSeconds": 88,
+  "sampleCount": 312,
+  "summary": {
+    "010C": { "label": "Obroty", "unit": "rpm", "min": 780, "max": 4210, "avg": 2260, "count": 312 }
+  },
+  "series": [
+    { "t": 0, "values": { "010C": 780, "010B": 31, "0110": 4.8 } }
   ],
-  "dtcs": []
+  "events": []
 }
 ```
 
@@ -87,6 +95,30 @@ Odpowiedź `200`:
 ```
 
 AI musi oddzielać fakty od hipotez. `confidence` przyjmuje `low`, `medium` albo `high`.
+
+## POST /v1/chat
+
+Rozmowa o jednej, zakończonej sesji pomiarowej. Żądanie to ładunek `/v1/diagnosis` uzupełniony o:
+
+```json
+{
+  "report": { "summary": "…", "confidence": "medium" },
+  "history": [{ "role": "user", "content": "…" }, { "role": "assistant", "content": "…" }],
+  "question": "Czy korekty paliwowe banku 2 są w normie?"
+}
+```
+
+Historia jest przycinana do dwunastu ostatnich wiadomości, pytanie do 2000 znaków. Odpowiedź `200`:
+
+```json
+{
+  "answer": "Średnia LTFT banku 2 wynosi 8,4% przy 312 próbkach…",
+  "basedOnData": true,
+  "followUps": ["Porównaj oba banki pod obciążeniem", "Sprawdź MAF przy pełnym otwarciu przepustnicy"]
+}
+```
+
+`basedOnData` jest `false`, gdy model odpowiada z wiedzy ogólnej, a nie z próbek tej sesji. Aplikacja oznacza taką odpowiedź w interfejsie.
 
 ## Błędy
 

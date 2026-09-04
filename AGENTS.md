@@ -9,6 +9,7 @@ Ten plik jest punktem startowym dla każdego agenta pracującego w repozytorium.
 5. `docs/ROADMAP.md`
 6. `docs/DATA_PLATFORM.md`
 7. `docs/AGENT_ARCHITECTURE.md`
+8. `database/README.md`
 
 ## Cel produktu
 
@@ -18,7 +19,7 @@ Samochód referencyjny: Saab 9-3 2.8T B284, ISO 15765-4 CAN 11-bit 500 kbaud. Te
 
 ## Stan referencyjny
 
-Aktualna wersja projektu: `0.4.0`.
+Aktualna wersja projektu: `0.5.0`.
 
 Zaimplementowane:
 
@@ -30,7 +31,10 @@ Zaimplementowane:
 - Live Data z wykrywaniem obsługiwanych PID-ów;
 - lokalny trwały dziennik i udostępnianie pliku tekstowego;
 - ekran opisu objawu i wyboru planu danych przez backend AI;
-- backend Node z `GET /health`, `POST /v1/diagnostic-plan` i `POST /v1/diagnosis`;
+- backend z `GET /health`, `POST /v1/diagnostic-plan`, `POST /v1/diagnosis` i `POST /v1/chat`;
+- wdrożenie produkcyjne jako funkcje serverless Vercela pod `https://obd-murex.vercel.app/api`;
+- strukturalny recorder sesji z automatycznym zakończeniem pomiaru i eksportem JSON;
+- ekran raportu AI oddzielający obserwacje od hipotez oraz rozmowa o zebranych danych;
 - tryb `AI_MOCK=true` do testu bez kosztów API;
 - integracja OpenAI Responses API ze Structured Outputs.
 
@@ -41,7 +45,8 @@ Zweryfikowane na prawdziwym aucie w wersji 0.2.0: połączenie ELM327, protokó�
 - Nie dodawaj zapisu, kodowania, kasowania DTC, sterowania elementami wykonawczymi, Security Access, surowego wstrzykiwania ramek CAN ani flashowania ECU.
 - Nie pozwalaj modelowi AI przesyłać dowolnej komendy do ELM327.
 - Każdy plan AI filtruj po stronie TypeScript i ponownie po stronie natywnego Androida.
-- Klucz `OPENAI_API_KEY` może istnieć wyłącznie na backendzie. Nigdy w `VITE_*`, kodzie React, Capacitor config ani APK.
+- Klucz `OPENAI_API_KEY` może istnieć wyłącznie na backendzie — w zmiennych środowiskowych Vercela albo w `.env` serwera deweloperskiego. Nigdy w `VITE_*`, kodzie React, Capacitor config ani APK.
+- Nie duplikuj logiki AI między `api/` a `server/`. Jedno źródło prawdy to `api/_lib/ai.mjs`.
 - Dane AI traktuj jako wskazówki diagnostyczne, nie pewną diagnozę. Oddzielaj obserwacje od hipotez.
 - Test drogowy nie może wymagać patrzenia na ekran ani ręcznej obsługi podczas jazdy.
 - Nie zgłaszaj testu sprzętowego jako zaliczonego bez rzeczywistych odpowiedzi ELM/ECU w logu.
@@ -55,7 +60,10 @@ Zweryfikowane na prawdziwym aucie w wersji 0.2.0: połączenie ELM327, protokó�
 - walidacja planu AI: `src/services/diagnosticPlanner.ts`
 - zapis logów: `src/services/testLog.ts`
 - natywny Bluetooth i parsowanie PID: `android/app/src/main/java/pl/obdai/scanner/BluetoothSerialPlugin.java`
-- backend AI: `server/index.mjs`
+- logika AI (wspólna dla produkcji i rozwoju): `api/_lib/ai.mjs`
+- funkcje serverless: `api/health.mjs`, `api/v1/*.mjs`
+- lokalny serwer deweloperski: `server/index.mjs`
+- recorder sesji: `src/services/sessionRecorder.ts`
 - schemat i seed bazy: `database/`
 - rejestr oraz kontrakty agentów: `agents/`
 - zmienne środowiskowe: `.env.example`

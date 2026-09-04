@@ -25,3 +25,4 @@ android/captures/
 # Katalogi robocze (klaster testowy PostgreSQL, tymczasowe pliki gita)
 work/
 _git_tmp/
+.vercel

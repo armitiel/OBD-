@@ -2,7 +2,9 @@
 
 Dokumentacja dla agentów i deweloperów zaczyna się w [`AGENTS.md`](AGENTS.md). Pełne założenia, architektura, API, platforma danych i procedury testowe są w katalogu [`docs/`](docs/). Schemat PostgreSQL znajduje się w [`database/`](database/), a role i kontrakty agentów w [`agents/`](agents/).
 
-Bezpieczny, tylko-do-odczytu klient ELM327 Bluetooth Classic dla Androida. Wersja 0.4.0 obejmuje listę sparowanych urządzeń, połączenie SPP, inicjalizację `ATZ`, `ATE0`, `ATI`, `ATSP0`, terminal surowych komend, trwały dziennik testu, Live Data oraz dobór planu pomiaru przez backend AI.
+Bezpieczny, tylko-do-odczytu klient ELM327 Bluetooth Classic dla Androida. Wersja 0.5.0 obejmuje listę sparowanych urządzeń, połączenie SPP, inicjalizację `ATZ`, `ATE0`, `ATI`, `ATSP0`, terminal surowych komend, trwały dziennik testu, Live Data, dobór planu pomiaru przez AI, strukturalny recorder sesji, raport diagnostyczny oraz rozmowę o zebranych danych.
+
+Backend produkcyjny stoi na Vercelu: `https://obd-murex.vercel.app/api`. Pod tym samym adresem działa interfejs w trybie demonstracyjnym przeglądarki — cały przepływ (plan AI → pomiar → raport → rozmowa) można przejść bez adaptera i bez telefonu.
 
 Terminal zapisuje automatycznie do 2000 ostatnich wpisów w pamięci aplikacji. Przycisk **Udostępnij log** tworzy czytelny plik `.txt` zawierający urządzenie, protokół, komendy, odpowiedzi, błędy i znaczniki czasu.
 
@@ -40,6 +42,14 @@ Plugin używa standardowego profilu Bluetooth SPP (`00001101-0000-1000-8000-0080
 ## Live Data
 
 Po potwierdzeniu połączenia z ECU przyciskiem **Sprawdź ECU i PID-y** można uruchomić ciągły odczyt. Aplikacja najpierw sprawdza bitmapy obsługiwanych PID-ów, a następnie odpytuje tylko parametry dostępne w aucie: RPM, MAP, MAF, STFT/LTFT dla obu banków, temperatury, obciążenie, przepustnicę, prędkość, kąt zapłonu, ciśnienie atmosferyczne i napięcie modułu. Każda paczka wraz z szybkością adaptera jest automatycznie dopisywana do dziennika.
+
+## Pomiar, raport i rozmowa
+
+Po dobraniu planu i uruchomieniu Live Data aplikacja zapisuje strukturalną sesję: każda paczka staje się próbką z czasem liczonym od startu pomiaru. Pomiar kończy się sam po czasie z planu, a sesja przeżywa zamknięcie aplikacji.
+
+Ekran raportu pokazuje statystyki każdego parametru (min, średnia, max, liczba próbek) i pozwala wysłać sesję do analizy. Raport rozdziela obserwacje od hipotez — hipotezy są oznaczone innym kolorem, bo nie są diagnozą.
+
+Panel rozmowy odpowiada na pytania o konkretny pomiar. Do modelu trafiają statystyki i szereg czasowy przerzedzony do 120 punktów, nie wszystkie próbki. Odpowiedź spoza danych pomiarowych jest w interfejsie wyraźnie oznaczona.
 
 ## Następne moduły
 

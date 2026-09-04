@@ -1,0 +1,8 @@
+android/
+outputs/
+work/
+database/
+docs/
+server/
+*.png
+*.apk

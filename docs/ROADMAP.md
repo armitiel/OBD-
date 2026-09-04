@@ -29,30 +29,32 @@ Legenda: `[x]` gotowe, `[~]` częściowo, `[ ]` planowane.
 - [x] podwójna walidacja dozwolonych PID-ów;
 - [x] test aplikacja → backend mock → plan na Galaxy;
 - [ ] test z rzeczywistym kluczem OpenAI;
-- [ ] autoryzacja i ograniczenia kosztu.
+- [x] opcjonalny token dostępu do backendu (`OBD_ACCESS_TOKEN`);
+- [ ] limity żądań i kontrola kosztu.
 
 ## Etap 4 — recorder
 
-- [ ] wersjonowany format sesji;
-- [ ] próbki z monotonicznym czasem;
-- [ ] automatyczny czas testu z planu;
+- [x] wersjonowany format sesji (`ObdSession`, `schemaVersion: 1`);
+- [x] próbki z monotonicznym czasem od startu sesji;
+- [x] automatyczny czas testu z planu;
 - [ ] markery: jałowy, przyspieszenie, odpuszczenie, zdarzenie użytkownika;
-- [ ] zapis lokalny odporny na zamknięcie aplikacji;
-- [ ] eksport JSON i czytelnego TXT;
-- [ ] kompresja/ograniczenie danych przed wysłaniem.
+- [x] zapis lokalny odporny na zamknięcie aplikacji (co 20 paczek i przy zakończeniu);
+- [x] eksport JSON; TXT nadal osobno przez dziennik terminala;
+- [x] ograniczenie danych przed wysłaniem (statystyki + szereg przerzedzony do 120 punktów).
 
 ## Etap 5 — analiza AI
 
-- [~] endpoint `/v1/diagnosis` i schemat odpowiedzi;
-- [ ] wysyłka zakończonej sesji;
-- [ ] ekran obserwacji, hipotez i pewności;
+- [x] endpoint `/v1/diagnosis` i schemat odpowiedzi;
+- [x] wysyłka zakończonej sesji;
+- [x] ekran obserwacji, hipotez i pewności;
+- [x] rozmowa o zebranych danych (`/v1/chat`) z oznaczaniem odpowiedzi spoza pomiaru;
 - [ ] dalszy plan testu bez dowolnych komend;
 - [ ] porównanie banków i wykrywanie anomalii lokalnych przed AI;
 - [ ] testy regresyjne na zapisanych sesjach.
 
 ## Etap 6 — produkt
 
-- [ ] backend HTTPS;
+- [x] backend HTTPS (Vercel, `https://obd-murex.vercel.app/api`);
 - [ ] uwierzytelnianie i limity;
 - [ ] baza sesji i synchronizacja opcjonalna;
 - [ ] polityka prywatności i retencji;
@@ -61,15 +63,26 @@ Legenda: `[x]` gotowe, `[~]` częściowo, `[ ]` planowane.
 - [ ] profile kolejnych aut i adapterów;
 - [ ] opcjonalny webowy panel raportów.
 
+## Platforma danych technicznych
+
+- [x] model relacyjny PostgreSQL dla pojazdów, silników, ECU, PID-ów, DTC i źródeł;
+- [x] model twierdzeń, dowodów, konfliktów i przeglądu człowieka;
+- [x] rejestr 11 ról agentowych, osobna bramka człowieka i kontrakty JSON;
+- [x] migracja sprawdzona na czystym PostgreSQL;
+- [ ] podłączenie backendu Node do PostgreSQL;
+- [ ] widoki publikacyjne i role least-privilege;
+- [ ] pipeline importu dokumentów;
+- [ ] hybrydowe wyszukiwanie SQL + indeks dokumentów;
+- [ ] panel przeglądu i publikacji danych;
+- [ ] testy ewaluacyjne agentów na kontrolowanym korpusie.
+
 ## Najbliższe zadanie dla kolejnego agenta
 
-Zaimplementować strukturalny recorder oraz spięcie z `/v1/diagnosis`:
+Recorder i analiza AI są gotowe w 0.5.0. Następne w kolejności:
 
-1. utworzyć `ObdSession` i `ObdSample` w `src/types/obd.ts`;
-2. agregować wartości z każdej `LiveDataBatch` według `timestamp`;
-3. zakończyć pomiar automatycznie po `diagnosticPlan.durationSeconds`;
-4. zapisać sesję lokalnie przed wywołaniem sieci;
-5. dodać ekran podsumowania i przycisk analizy AI;
-6. przesłać ograniczony, wersjonowany payload;
-7. zwalidować odpowiedź diagnozy i pokazać obserwacje oddzielnie od hipotez;
-8. zachować plan bazowy i eksport offline przy braku backendu.
+1. markery zdarzeń w trakcie pomiaru (jałowy, przyspieszenie, odpuszczenie) — bez patrzenia w ekran podczas jazdy;
+2. lokalne wykrywanie anomalii przed wywołaniem AI: różnica korekt między bankami, MAP niezgodny z obrotami, spadek MAF;
+3. odczyt DTC trybem `03` i dołączenie ich do ładunku analizy;
+4. limity żądań i kontrola kosztu na backendzie;
+5. podłączenie backendu do bazy PostgreSQL i zapis sesji poza telefonem;
+6. testy regresyjne na zapisanych sesjach JSON.
