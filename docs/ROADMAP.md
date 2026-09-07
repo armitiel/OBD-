@@ -37,6 +37,8 @@ Legenda: `[x]` gotowe, `[~]` częściowo, `[ ]` planowane.
 - [x] wersjonowany format sesji (`ObdSession`, `schemaVersion: 1`);
 - [x] próbki z monotonicznym czasem od startu sesji;
 - [x] automatyczny czas testu z planu;
+- [x] ekran nie gaśnie w trakcie pomiaru (`FLAG_KEEP_SCREEN_ON` na czas Live Data);
+- [ ] nagrywanie przy aplikacji w tle — wymaga usługi pierwszoplanowej;
 - [ ] markery: jałowy, przyspieszenie, odpuszczenie, zdarzenie użytkownika;
 - [x] zapis lokalny odporny na zamknięcie aplikacji (co 20 paczek i przy zakończeniu);
 - [x] eksport JSON; TXT nadal osobno przez dziennik terminala;

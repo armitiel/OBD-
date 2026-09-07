@@ -5,7 +5,9 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothSocket;
+import android.app.Activity;
 import android.os.Build;
+import android.view.WindowManager;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -179,6 +181,29 @@ public class BluetoothSerialPlugin extends Plugin {
         result.put("connected", connected);
         if (connectedAddress != null) result.put("address", connectedAddress);
         call.resolve(result);
+    }
+
+    /**
+     * Utrzymuje ekran włączony na czas pomiaru. Bez tego WebView zostaje
+     * wstrzymany po wygaszeniu ekranu i pętla Live Data przestaje zbierać próbki
+     * w połowie testu drogowego.
+     */
+    @PluginMethod
+    public void setKeepAwake(PluginCall call) {
+        applyKeepAwake(Boolean.TRUE.equals(call.getBoolean("enabled", false)));
+        call.resolve();
+    }
+
+    private void applyKeepAwake(final boolean enabled) {
+        final Activity activity = getActivity();
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            if (enabled) {
+                activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            } else {
+                activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        });
     }
 
     @PluginMethod
@@ -507,6 +532,7 @@ public class BluetoothSerialPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        applyKeepAwake(false);
         closeConnection();
         serialExecutor.shutdownNow();
         super.handleOnDestroy();

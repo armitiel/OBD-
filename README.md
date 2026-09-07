@@ -47,6 +47,8 @@ Po potwierdzeniu połączenia z ECU przyciskiem **Sprawdź ECU i PID-y** można 
 
 Po dobraniu planu i uruchomieniu Live Data aplikacja zapisuje strukturalną sesję: każda paczka staje się próbką z czasem liczonym od startu pomiaru. Pomiar kończy się sam po czasie z planu, a sesja przeżywa zamknięcie aplikacji.
 
+Na czas pomiaru ekran nie gaśnie — plugin natywny ustawia `FLAG_KEEP_SCREEN_ON` i zdejmuje ją po zatrzymaniu odczytu. Bez tego Android wstrzymuje WebView razem z pętlą Live Data i test drogowy urywa się w połowie. Przełączenie się na inną aplikację nadal zatrzyma zapis: nagrywanie w tle wymagałoby usługi pierwszoplanowej, której to wydanie nie ma.
+
 Ekran raportu pokazuje statystyki każdego parametru (min, średnia, max, liczba próbek) i pozwala wysłać sesję do analizy. Raport rozdziela obserwacje od hipotez — hipotezy są oznaczone innym kolorem, bo nie są diagnozą.
 
 Panel rozmowy odpowiada na pytania o konkretny pomiar. Do modelu trafiają statystyki i szereg czasowy przerzedzony do 120 punktów, nie wszystkie próbki. Odpowiedź spoza danych pomiarowych jest w interfejsie wyraźnie oznaczona.

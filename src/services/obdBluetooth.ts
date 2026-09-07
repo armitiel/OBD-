@@ -11,6 +11,7 @@ interface BluetoothSerialPlugin {
   scanBasicPids(): Promise<ObdSnapshot>;
   readLiveData(options: { pids?: string[] }): Promise<LiveDataBatch>;
   isConnected(): Promise<{ connected: boolean; address?: string }>;
+  setKeepAwake(options: { enabled: boolean }): Promise<void>;
 }
 
 const NativeBluetooth = registerPlugin<BluetoothSerialPlugin>('BluetoothSerial');
@@ -53,6 +54,20 @@ class ObdBluetoothService {
       return;
     }
     await NativeBluetooth.disconnect();
+  }
+
+  /**
+   * Blokada wygaszania ekranu na czas pomiaru. Po wygaszeniu ekranu Android
+   * wstrzymuje WebView, a wraz z nim pętlę Live Data — sesja urywałaby się
+   * w połowie testu drogowego. Błąd tutaj nie może przerwać pomiaru.
+   */
+  async setKeepAwake(enabled: boolean) {
+    if (!this.isNativeAndroid) return;
+    try {
+      await NativeBluetooth.setKeepAwake({ enabled });
+    } catch {
+      // starsze wydanie pluginu nie zna tej metody — pomiar leci dalej
+    }
   }
 
   async sendCommand(command: string, timeoutMs = 3500) {

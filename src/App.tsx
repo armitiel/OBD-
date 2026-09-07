@@ -104,12 +104,13 @@ export default function App() {
   }, [addLine]);
 
   useEffect(() => { void refreshDevices(); }, [refreshDevices]);
-  useEffect(() => () => { liveRunId.current += 1; }, []);
+  useEffect(() => () => { liveRunId.current += 1; void obdBluetooth.setKeepAwake(false); }, []);
 
   const stopLiveData = useCallback((reason = '') => {
     const wasRunning = liveRunId.current > 0;
     liveRunId.current += 1;
     setLiveRunning(false);
+    void obdBluetooth.setKeepAwake(false);
     if (sessionRef.current && !sessionRef.current.endedAt) {
       sessionRef.current = finishSession(sessionRef.current);
       persistSession(sessionRef.current);
@@ -196,6 +197,7 @@ export default function App() {
     liveRunId.current = runId;
     setLiveRunning(true);
 
+    void obdBluetooth.setKeepAwake(true);
     const startedAtMs = Date.now();
     const limitMs = diagnosticPlan.durationSeconds * 1000;
     sessionRef.current = createSession(diagnosticPlan, symptoms.trim(), conditions);
@@ -204,7 +206,7 @@ export default function App() {
     setChatMessages([]);
     setChatFollowUps([]);
     persistSession(sessionRef.current);
-    addLine('info', `Live Data uruchomione · plan „${diagnosticPlan.title}" · automatyczny koniec po ${diagnosticPlan.durationSeconds} s.`);
+    addLine('info', `Live Data uruchomione · plan „${diagnosticPlan.title}" · ekran nie zgaśnie · automatyczny koniec po ${diagnosticPlan.durationSeconds} s.`);
 
     let batchCount = 0;
 

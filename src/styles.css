@@ -191,3 +191,4 @@ footer { padding: 22px 4px 0; color: #5f7870; font-size: 9px; text-align: center
 .chat-input input { height: 44px; min-width: 0; padding: 0 12px; border: 1px solid var(--border); border-radius: 11px; background: #091411; color: #eaf5f1; font-size: 12px; outline: none; }
 .chat-input input:focus { border-color: rgba(103,245,189,.55); box-shadow: 0 0 0 3px rgba(103,245,189,.07); }
 .chat-card .card-heading .button-ghost { margin-top: 0; }
+.keep-awake { margin: 12px 1px 0; padding: 9px 11px; border-left: 2px solid var(--mint); border-radius: 0 8px 8px 0; background: var(--mint-soft); color: #a7e8ce; }

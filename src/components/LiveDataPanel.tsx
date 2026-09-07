@@ -38,6 +38,8 @@ export function LiveDataPanel({ batch, enabled, running, onToggle }: Props) {
         <p className="empty-state">Połącz ECU i uruchom odczyt. Aplikacja automatycznie pominie PID-y, których samochód nie obsługuje.</p>
       )}
 
+      {running ? <p className="hint keep-awake">Ekran pozostaje włączony do końca pomiaru. Nie przełączaj się na inną aplikację — zapis próbek zatrzyma się razem z ekranem.</p> : null}
+
       <button className={`button button-full ${running ? 'button-secondary' : 'button-primary'}`} type="button" onClick={onToggle} disabled={!enabled && !running}>
         {running ? 'Zatrzymaj Live Data' : 'Uruchom Live Data'}
       </button>
