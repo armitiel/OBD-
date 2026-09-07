@@ -24,6 +24,13 @@
 
         </activity>
 
+        <!-- Pomiar w tle: usługa trzyma proces przy życiu, gdy aplikacja schodzi
+             z ekranu. Sam zapis prowadzi ObdRecorder, usługa tylko go osłania. -->
+        <service
+            android:name=".ObdRecordingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -36,6 +43,11 @@
     </application>
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Zapis pomiaru przy aplikacji w tle. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 13+: bez tego usługa działa, ale powiadomienie jest ukryte. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 11 i starsze: Bluetooth Classic. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />

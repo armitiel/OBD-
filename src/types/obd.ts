@@ -115,3 +115,13 @@ export interface ChatAnswer {
   basedOnData: boolean;
   followUps: string[];
 }
+
+/** Stan natywnego rejestratora pomiaru (pętla żyje poza WebView). */
+export interface RecordingStatus {
+  recording: boolean;
+  sampleCount: number;
+  elapsedMs: number;
+  plannedMs: number;
+  error?: string;
+  stopReason?: string;
+}

@@ -72,6 +72,7 @@ export default function App() {
   const liveRunId = useRef(0);
   const sessionRef = useRef<ObdSession | null>(session);
   const labelsRef = useRef(new Map<string, { label: string; unit: string }>());
+  const drainedRef = useRef(0);
 
   const addLine = useCallback((direction: TerminalLine['direction'], text: string) => {
     setLines((current) => [...current.slice(-1999), { id: nextLineId.current++, direction, text, timestamp: new Date() }]);
@@ -104,12 +105,39 @@ export default function App() {
   }, [addLine]);
 
   useEffect(() => { void refreshDevices(); }, [refreshDevices]);
-  useEffect(() => () => { liveRunId.current += 1; void obdBluetooth.setKeepAwake(false); }, []);
+
+  // Aplikacja mogła zostać zamknięta w trakcie jazdy, a pomiar leciał dalej
+  // w usłudze pierwszoplanowej. Po powrocie podpinamy się do tego, co trwa.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await obdBluetooth.getRecordingStatus();
+        if (cancelled || !status.recording) return;
+        const stored = sessionRef.current;
+        if (!stored || stored.endedAt) return;
+        const runId = liveRunId.current + 1;
+        liveRunId.current = runId;
+        drainedRef.current = stored.samples.length;
+        setLiveRunning(true);
+        setConnectionState('ready');
+        addLine('info', `Wznowiono podgląd — pomiar trwał w tle (${status.sampleCount} próbek).`);
+        void followRecording(runId, new Date(stored.startedAt).getTime());
+      } catch {
+        // brak rejestratora w tej wersji pluginu albo brak połączenia — nic nie robimy
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Zamknięcie widoku przerywa tylko odpytywanie — rejestrator w tle leci dalej.
+  useEffect(() => () => { liveRunId.current += 1; }, []);
 
   const stopLiveData = useCallback((reason = '') => {
     const wasRunning = liveRunId.current > 0;
     liveRunId.current += 1;
     setLiveRunning(false);
+    void obdBluetooth.stopRecording().catch(() => undefined);
     void obdBluetooth.setKeepAwake(false);
     if (sessionRef.current && !sessionRef.current.endedAt) {
       sessionRef.current = finishSession(sessionRef.current);
@@ -191,58 +219,91 @@ export default function App() {
     }
   };
 
+  /**
+   * Przenosi paczki z natywnego rejestratora do sesji. Rejestrator trzyma je
+   * pod indeksami i niczego nie kasuje, więc po powrocie z tła dociągamy
+   * dokładnie to, czego jeszcze nie mamy — bez duplikatów i bez luk.
+   */
+  const absorbBatches = useCallback((batches: LiveDataBatch[], startedAtMs: number) => {
+    if (batches.length === 0) return;
+    for (const batch of batches) {
+      for (const reading of batch.readings) {
+        if (!labelsRef.current.has(reading.pid)) labelsRef.current.set(reading.pid, { label: reading.label, unit: reading.unit });
+      }
+      if (sessionRef.current) sessionRef.current = appendBatch(sessionRef.current, batch, startedAtMs);
+    }
+    const last = batches[batches.length - 1];
+    setLiveBatch(last);
+    if (sessionRef.current) setSession(sessionRef.current);
+
+    const speed = last.durationMs > 0 ? (last.readings.length * 1000 / last.durationMs).toFixed(1) : '—';
+    const values = last.readings.map((reading) => `${reading.pid}=${reading.formatted}`).join(' | ');
+    const skipped = batches.length > 1 ? ` (+${batches.length - 1} z tła)` : '';
+    addLine('rx', `LIVE · ${values || 'brak danych'} · ${speed} PID/s${skipped}`);
+  }, [addLine]);
+
+  /** Odpytuje rejestrator co sekundę. Uśpienie tej pętli w tle nie gubi danych. */
+  const followRecording = useCallback(async (runId: number, startedAtMs: number) => {
+    let drained = drainedRef.current;
+    let sinceLastPersist = 0;
+
+    while (liveRunId.current === runId) {
+      try {
+        const { batches, status } = await obdBluetooth.drainSamples(drained);
+        if (liveRunId.current !== runId) break;
+
+        drained += batches.length;
+        drainedRef.current = drained;
+        absorbBatches(batches, startedAtMs);
+
+        sinceLastPersist += batches.length;
+        if (sessionRef.current && sinceLastPersist >= PERSIST_EVERY) {
+          persistSession(sessionRef.current);
+          sinceLastPersist = 0;
+        }
+
+        if (!status.recording) {
+          if (status.error && sessionRef.current) {
+            sessionRef.current = appendEvent(sessionRef.current, 'error', status.error, startedAtMs);
+          }
+          stopLiveData(`${status.stopReason || 'Pomiar zakończony.'} · ${sessionRef.current?.samples.length ?? 0} próbek.`);
+          break;
+        }
+      } catch (error) {
+        if (liveRunId.current === runId) stopLiveData(`Odczyt rejestratora: ${formatError(error)}`);
+        break;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+  }, [absorbBatches, stopLiveData]);
+
   const startLiveData = async () => {
     if (connectionState !== 'ready' || busy || liveRunning) return;
     const runId = liveRunId.current + 1;
     liveRunId.current = runId;
     setLiveRunning(true);
 
-    void obdBluetooth.setKeepAwake(true);
     const startedAtMs = Date.now();
-    const limitMs = diagnosticPlan.durationSeconds * 1000;
+    drainedRef.current = 0;
     sessionRef.current = createSession(diagnosticPlan, symptoms.trim(), conditions);
     setSession(sessionRef.current);
     setReport(null);
     setChatMessages([]);
     setChatFollowUps([]);
     persistSession(sessionRef.current);
-    addLine('info', `Live Data uruchomione · plan „${diagnosticPlan.title}" · ekran nie zgaśnie · automatyczny koniec po ${diagnosticPlan.durationSeconds} s.`);
 
-    let batchCount = 0;
-
-    while (liveRunId.current === runId) {
-      try {
-        const batch = await obdBluetooth.readLiveData(diagnosticPlan.pids);
-        if (liveRunId.current !== runId) break;
-
-        setLiveBatch(batch);
-        for (const reading of batch.readings) {
-          if (!labelsRef.current.has(reading.pid)) labelsRef.current.set(reading.pid, { label: reading.label, unit: reading.unit });
-        }
-        if (sessionRef.current) {
-          sessionRef.current = appendBatch(sessionRef.current, batch, startedAtMs);
-          setSession(sessionRef.current);
-          batchCount += 1;
-          if (batchCount % PERSIST_EVERY === 0) persistSession(sessionRef.current);
-        }
-
-        const speed = batch.durationMs > 0 ? (batch.readings.length * 1000 / batch.durationMs).toFixed(1) : '—';
-        const values = batch.readings.map((reading) => `${reading.pid}=${reading.formatted}`).join(' | ');
-        addLine('rx', `LIVE · ${values || 'brak danych'} · ${speed} PID/s`);
-
-        if (Date.now() - startedAtMs >= limitMs) {
-          stopLiveData(`Pomiar zakończony automatycznie po ${diagnosticPlan.durationSeconds} s · ${sessionRef.current?.samples.length ?? 0} próbek.`);
-          break;
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-      } catch (error) {
-        if (liveRunId.current === runId) {
-          if (sessionRef.current) sessionRef.current = appendEvent(sessionRef.current, 'error', formatError(error), startedAtMs);
-          stopLiveData(`Live Data przerwane: ${formatError(error)}`);
-        }
-        break;
-      }
+    try {
+      await obdBluetooth.resetRecording();
+      await obdBluetooth.startRecording(diagnosticPlan.pids, diagnosticPlan.durationSeconds, diagnosticPlan.title);
+    } catch (error) {
+      liveRunId.current += 1;
+      setLiveRunning(false);
+      addLine('error', `Nie udało się uruchomić pomiaru: ${formatError(error)}`);
+      return;
     }
+
+    addLine('info', `Pomiar uruchomiony · plan „${diagnosticPlan.title}" · zapis trwa również przy zgaszonym ekranie · koniec po ${diagnosticPlan.durationSeconds} s.`);
+    void followRecording(runId, startedAtMs);
   };
 
   const createDiagnosticPlan = async () => {

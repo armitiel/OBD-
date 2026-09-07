@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import type { BluetoothDevice, LiveDataBatch, ObdSnapshot } from '../types/obd';
+import type { BluetoothDevice, LiveDataBatch, ObdSnapshot, RecordingStatus } from '../types/obd';
 
 interface BluetoothSerialPlugin {
   requestPermissions(): Promise<{ granted: boolean }>;
@@ -12,6 +12,11 @@ interface BluetoothSerialPlugin {
   readLiveData(options: { pids?: string[] }): Promise<LiveDataBatch>;
   isConnected(): Promise<{ connected: boolean; address?: string }>;
   setKeepAwake(options: { enabled: boolean }): Promise<void>;
+  startRecording(options: { pids: string[]; durationSeconds: number; planTitle: string }): Promise<RecordingStatus>;
+  stopRecording(options: { reason?: string }): Promise<RecordingStatus>;
+  getRecordingStatus(): Promise<RecordingStatus>;
+  drainSamples(options: { fromIndex: number }): Promise<{ batches: LiveDataBatch[]; status: RecordingStatus }>;
+  resetRecording(): Promise<void>;
 }
 
 const NativeBluetooth = registerPlugin<BluetoothSerialPlugin>('BluetoothSerial');
@@ -122,6 +127,56 @@ class ObdBluetoothService {
         { pid: '0111', label: 'Przepustnica', value: '0 %', raw: '7E8 03 41 11 00' },
       ],
     };
+  }
+
+  // ─── Nagrywanie w tle ────────────────────────────────────────────────────
+  // Pętla żyje po stronie natywnej, więc zapis trwa także wtedy, gdy WebView
+  // jest uśpiony. Tryb demonstracyjny przeglądarki symuluje ją w JS.
+
+  private demoRecording: { batches: LiveDataBatch[]; startedAt: number; durationMs: number; timer: number } | null = null;
+
+  async startRecording(pids: string[], durationSeconds: number, planTitle: string): Promise<RecordingStatus> {
+    if (this.isNativeAndroid) return NativeBluetooth.startRecording({ pids, durationSeconds, planTitle });
+    const state = { batches: [] as LiveDataBatch[], startedAt: Date.now(), durationMs: durationSeconds * 1000, timer: 0 };
+    state.timer = window.setInterval(async () => {
+      if (Date.now() - state.startedAt >= state.durationMs) {
+        window.clearInterval(state.timer);
+        this.demoRecording = { ...state, timer: 0 };
+        return;
+      }
+      state.batches.push(await this.readLiveData(pids));
+    }, 900);
+    this.demoRecording = state;
+    return this.getRecordingStatus();
+  }
+
+  async stopRecording(reason = 'Pomiar zatrzymany ręcznie.'): Promise<RecordingStatus> {
+    if (this.isNativeAndroid) return NativeBluetooth.stopRecording({ reason });
+    if (this.demoRecording?.timer) window.clearInterval(this.demoRecording.timer);
+    if (this.demoRecording) this.demoRecording = { ...this.demoRecording, timer: 0 };
+    return this.getRecordingStatus();
+  }
+
+  async getRecordingStatus(): Promise<RecordingStatus> {
+    if (this.isNativeAndroid) return NativeBluetooth.getRecordingStatus();
+    const state = this.demoRecording;
+    if (!state) return { recording: false, sampleCount: 0, elapsedMs: 0, plannedMs: 0 };
+    return {
+      recording: state.timer !== 0,
+      sampleCount: state.batches.length,
+      elapsedMs: Date.now() - state.startedAt,
+      plannedMs: state.durationMs,
+    };
+  }
+
+  async drainSamples(fromIndex: number): Promise<{ batches: LiveDataBatch[]; status: RecordingStatus }> {
+    if (this.isNativeAndroid) return NativeBluetooth.drainSamples({ fromIndex });
+    return { batches: (this.demoRecording?.batches ?? []).slice(fromIndex), status: await this.getRecordingStatus() };
+  }
+
+  async resetRecording() {
+    if (this.isNativeAndroid) return NativeBluetooth.resetRecording();
+    this.demoRecording = null;
   }
 
   async readLiveData(pids?: string[]): Promise<LiveDataBatch> {

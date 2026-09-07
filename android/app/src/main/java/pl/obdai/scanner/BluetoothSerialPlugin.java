@@ -42,7 +42,7 @@ import java.util.concurrent.Executors;
         )
     }
 )
-public class BluetoothSerialPlugin extends Plugin {
+public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler {
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final int DEFAULT_TIMEOUT_MS = 3500;
     private static final Set<String> SAFE_AT_COMMANDS = new java.util.HashSet<>(java.util.Arrays.asList(
@@ -168,6 +168,10 @@ public class BluetoothSerialPlugin extends Plugin {
 
     @PluginMethod
     public void disconnect(PluginCall call) {
+        // Rozłączenie kończy też ewentualny pomiar w tle — inaczej rejestrator
+        // waliłby w zamknięte gniazdo aż do pierwszego wyjątku.
+        ObdRecorder.stop("Rozłączono adapter.");
+        applyKeepAwake(false);
         serialExecutor.execute(() -> {
             closeConnection();
             call.resolve();
@@ -279,40 +283,104 @@ public class BluetoothSerialPlugin extends Plugin {
     public void readLiveData(PluginCall call) {
         serialExecutor.execute(() -> {
             try {
-                long startedAt = android.os.SystemClock.elapsedRealtime();
-                if (supportedPids.isEmpty()) detectSupportedPids();
-                Set<String> requestedPids = new HashSet<>();
-                JSArray requested = call.getArray("pids");
-                if (requested != null) {
-                    for (int index = 0; index < requested.length(); index++) {
-                        String pid = requested.optString(index, "").toUpperCase(Locale.US);
-                        requestedPids.add(pid);
-                    }
-                }
-                JSArray readings = new JSArray();
-                for (String[] definition : LIVE_PID_DEFINITIONS) {
-                    String command = definition[0];
-                    if (!requestedPids.isEmpty() && !requestedPids.contains(command)) continue;
-                    int pid = Integer.parseInt(command.substring(2), 16);
-                    if (!supportedPids.contains(pid)) continue;
-                    try {
-                        String raw = exchange(command, 1800);
-                        addLiveReading(readings, command, definition[1], raw);
-                    } catch (IOException ignored) {
-                        // Pojedynczy brak odpowiedzi nie przerywa całej paczki Live Data.
-                    }
-                }
-                long durationMs = android.os.SystemClock.elapsedRealtime() - startedAt;
-                JSObject result = new JSObject();
-                result.put("timestamp", System.currentTimeMillis());
-                result.put("durationMs", durationMs);
-                result.put("supportedCount", supportedPids.size());
-                result.put("readings", readings);
-                call.resolve(result);
+                call.resolve(readBatch(pidSetFromCall(call.getArray("pids"))));
             } catch (Exception error) {
                 call.reject("Odczyt Live Data nie powiódł się: " + safeMessage(error), error);
             }
         });
+    }
+
+    private Set<String> pidSetFromCall(JSArray requested) {
+        Set<String> pids = new HashSet<>();
+        if (requested == null) return pids;
+        for (int index = 0; index < requested.length(); index++) {
+            pids.add(requested.optString(index, "").toUpperCase(Locale.US));
+        }
+        return pids;
+    }
+
+    /**
+     * Jedna paczka odczytów. Wspólna dla wywołania z WebView i dla natywnego
+     * rejestratora, żeby tryb w tle nie miał własnej, rozjeżdżającej się kopii
+     * walidacji PID-ów.
+     *
+     * Lista z planu AI jest tu przecinana z zamkniętym katalogiem
+     * LIVE_PID_DEFINITIONS oraz z bitmapą zgłoszoną przez ECU — to trzeci,
+     * niezależny poziom walidacji, obok backendu i warstwy TypeScript.
+     */
+    @Override
+    public JSObject readBatch(Set<String> requestedPids) throws Exception {
+        long startedAt = android.os.SystemClock.elapsedRealtime();
+        if (supportedPids.isEmpty()) detectSupportedPids();
+
+        JSArray readings = new JSArray();
+        for (String[] definition : LIVE_PID_DEFINITIONS) {
+            String command = definition[0];
+            if (!requestedPids.isEmpty() && !requestedPids.contains(command)) continue;
+            int pid = Integer.parseInt(command.substring(2), 16);
+            if (!supportedPids.contains(pid)) continue;
+            try {
+                String raw = exchange(command, 1800);
+                addLiveReading(readings, command, definition[1], raw);
+            } catch (IOException ignored) {
+                // Pojedynczy brak odpowiedzi nie przerywa całej paczki Live Data.
+            }
+        }
+
+        JSObject result = new JSObject();
+        result.put("timestamp", System.currentTimeMillis());
+        result.put("durationMs", android.os.SystemClock.elapsedRealtime() - startedAt);
+        result.put("supportedCount", supportedPids.size());
+        result.put("readings", readings);
+        return result;
+    }
+
+    // ─── Nagrywanie w tle ───────────────────────────────────────────────────
+
+    @PluginMethod
+    public void startRecording(PluginCall call) {
+        if (ObdRecorder.isRecording()) {
+            call.reject("Pomiar już trwa.");
+            return;
+        }
+        if (socket == null || !socket.isConnected()) {
+            call.reject("Najpierw połącz adapter.");
+            return;
+        }
+        Set<String> pids = pidSetFromCall(call.getArray("pids"));
+        int durationSeconds = call.getInt("durationSeconds", 60);
+        String planTitle = call.getString("planTitle", "Pomiar OBD");
+
+        ObdRecordingService.start(getContext(), planTitle, durationSeconds);
+        ObdRecorder.start(getContext(), this, pids, durationSeconds);
+        applyKeepAwake(true);
+        call.resolve(ObdRecorder.status());
+    }
+
+    @PluginMethod
+    public void stopRecording(PluginCall call) {
+        ObdRecorder.stop(call.getString("reason", "Pomiar zatrzymany ręcznie."));
+        applyKeepAwake(false);
+        call.resolve(ObdRecorder.status());
+    }
+
+    @PluginMethod
+    public void getRecordingStatus(PluginCall call) {
+        call.resolve(ObdRecorder.status());
+    }
+
+    @PluginMethod
+    public void drainSamples(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("batches", ObdRecorder.drain(call.getInt("fromIndex", 0)));
+        result.put("status", ObdRecorder.status());
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void resetRecording(PluginCall call) {
+        ObdRecorder.reset();
+        call.resolve();
     }
 
     private void addExchange(JSArray target, String command, int timeoutMs) throws IOException {
@@ -533,8 +601,13 @@ public class BluetoothSerialPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         applyKeepAwake(false);
-        closeConnection();
-        serialExecutor.shutdownNow();
+        // Gdy pomiar leci w tle, aktywność może zostać zniszczona (np. zamknięcie
+        // aplikacji z listy zadań) — gniazdo Bluetooth musi wtedy przeżyć, bo
+        // rejestrator wciąż z niego korzysta. Usługa pierwszoplanowa trzyma proces.
+        if (!ObdRecorder.isRecording()) {
+            closeConnection();
+            serialExecutor.shutdownNow();
+        }
         super.handleOnDestroy();
     }
 }
