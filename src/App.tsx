@@ -24,6 +24,7 @@ import type {
 
 const LAST_DEVICE_KEY = 'obd-ai-last-device';
 const ENDPOINT_KEY = 'obd-ai-backend-url';
+const LEGACY_BACKEND_URL = 'http://127.0.0.1:8787';
 const TOKEN_KEY = 'obd-ai-backend-token';
 const SYMPTOMS_KEY = 'obd-ai-symptoms';
 /** Co ile paczek zapisujemy sesję na dysk — kompromis między bezpieczeństwem a kosztem. */
@@ -48,7 +49,13 @@ export default function App() {
 
   const [symptoms, setSymptoms] = useState(() => window.localStorage.getItem(SYMPTOMS_KEY) || '');
   const [conditions, setConditions] = useState<TestConditions>(DEFAULT_CONDITIONS);
-  const [endpoint, setEndpoint] = useState(() => window.localStorage.getItem(ENDPOINT_KEY) || DEFAULT_BACKEND_URL);
+  const [endpoint, setEndpoint] = useState(() => {
+    const stored = window.localStorage.getItem(ENDPOINT_KEY);
+    // Migracja z 0.4.0: tam domyślnym adresem był lokalny backend przez adb reverse,
+    // który po aktualizacji zostawał w localStorage i cicho psuł każde wywołanie AI.
+    if (!stored || stored === LEGACY_BACKEND_URL) return DEFAULT_BACKEND_URL;
+    return stored;
+  });
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_KEY) || '');
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthError, setHealthError] = useState('');
