@@ -192,3 +192,27 @@ footer { padding: 22px 4px 0; color: #5f7870; font-size: 9px; text-align: center
 .chat-input input:focus { border-color: rgba(103,245,189,.55); box-shadow: 0 0 0 3px rgba(103,245,189,.07); }
 .chat-card .card-heading .button-ghost { margin-top: 0; }
 .keep-awake { margin: 12px 1px 0; padding: 9px 11px; border-left: 2px solid var(--mint); border-radius: 0 8px 8px 0; background: var(--mint-soft); color: #a7e8ce; }
+
+/* ── Ręczne ustawienie czasu pomiaru ───────────────────────────────────── */
+.duration-control { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(103,245,189,.1); }
+.duration-control label { display: block; color: var(--muted); font-size: 10px; margin-bottom: 8px; }
+.duration-control label strong { color: #dff8ee; font-size: 12px; margin-left: 4px; }
+.duration-control input[type="range"] { width: 100%; height: 26px; accent-color: var(--mint); background: transparent; cursor: pointer; }
+.duration-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.duration-presets .chip { padding: 5px 10px; font-size: 10px; }
+.duration-presets .chip.active { border-color: rgba(103,245,189,.5); background: rgba(103,245,189,.16); color: #dff8ee; font-weight: 700; }
+
+/* ── Widoczny stan usługi AI ───────────────────────────────────────────── */
+.ai-badge { display: inline-flex; align-items: center; gap: 6px; width: auto; padding: 0 11px; }
+.ai-badge i { width: 6px; height: 6px; border-radius: 50%; background: #60746d; flex: 0 0 6px; }
+.ai-badge.ok { border-color: rgba(103,245,189,.4); }
+.ai-badge.ok i { background: var(--mint); box-shadow: 0 0 10px var(--mint); }
+.ai-badge.checking i { background: #f4c56f; animation: pulse 1s infinite; }
+.ai-badge.warn { border-color: rgba(245,186,103,.35); color: #e9cda5; }
+.ai-badge.warn i { background: #f4c56f; }
+.ai-badge.error { border-color: rgba(255,98,88,.35); color: #ff9c96; }
+.ai-badge.error i { background: #ff6258; }
+.ai-availability { margin: -8px 0 14px; font-size: 10px; line-height: 1.5; color: var(--muted); }
+.ai-availability.ok { color: #8fc7b1; }
+.ai-availability.warn { color: #e9cda5; }
+.ai-availability.error { color: #ff9c96; }

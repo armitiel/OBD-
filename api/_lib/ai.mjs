@@ -36,7 +36,7 @@ export const planSchema = {
   properties: {
     id: { type: 'string' }, title: { type: 'string' }, reason: { type: 'string' },
     pids: { type: 'array', minItems: 2, maxItems: 15, items: { type: 'string', enum: [...allowedPids] } },
-    durationSeconds: { type: 'integer', minimum: 15, maximum: 300 },
+    durationSeconds: { type: 'integer', minimum: 15, maximum: 900 },
   },
   required: ['id', 'title', 'reason', 'pids', 'durationSeconds'],
 };
@@ -94,14 +94,14 @@ function validatePlan(plan, availablePids) {
   const available = new Set(Array.isArray(availablePids) && availablePids.length > 0 ? availablePids : [...allowedPids]);
   const pids = [...new Set((Array.isArray(plan.pids) ? plan.pids : []).filter((pid) => allowedPids.has(pid) && available.has(pid)))];
   if (pids.length < 2) throw new Error('AI nie wybrało wystarczającej liczby bezpiecznych PID-ów.');
-  return { ...plan, pids, durationSeconds: Math.min(300, Math.max(15, Number(plan.durationSeconds) || 60)) };
+  return { ...plan, pids, durationSeconds: Math.min(900, Math.max(15, Number(plan.durationSeconds) || 60)) };
 }
 
 export async function handlePlan(body) {
   if (MOCK_MODE) return mockPlan(body?.symptoms);
   const plan = await structuredResponse({
     name: 'diagnostic_plan', schema: planSchema,
-    instructions: `You plan read-only OBD-II data collection for the described vehicle. Select only PIDs from the provided catalog. Pick the smallest useful PID set for the reported symptom. Title and reason must be concise Polish. This is a measurement plan, not a diagnosis. ${SAFETY_RULES} Catalog: ${JSON.stringify(PID_CATALOG)}`,
+    instructions: `You plan read-only OBD-II data collection for the described vehicle. Select only PIDs from the provided catalog. Pick the smallest useful PID set for the reported symptom. Set durationSeconds to the time the driver realistically needs to reach the conditions where the symptom appears: a stationary idle check may need 30-60 s, but a road test under load needs at least 180 s. Title and reason must be concise Polish. This is a measurement plan, not a diagnosis. ${SAFETY_RULES} Catalog: ${JSON.stringify(PID_CATALOG)}`,
     input: body,
   });
   return validatePlan(plan, body?.availablePids);

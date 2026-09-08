@@ -8,6 +8,19 @@ export const ALLOWED_LIVE_PIDS = [
 
 const allowedPidSet = new Set<string>(ALLOWED_LIVE_PIDS);
 
+/**
+ * Widełki czasu pomiaru. Górna granica to tyle, ile obsługuje rejestrator
+ * natywny — na test drogowy 5 minut bywa za mało, zanim dojedzie się do
+ * warunków, w których objaw się pojawia.
+ */
+export const MIN_DURATION_SECONDS = 15;
+export const MAX_DURATION_SECONDS = 900;
+
+export function clampDuration(seconds: number) {
+  if (!Number.isFinite(seconds)) return 60;
+  return Math.min(MAX_DURATION_SECONDS, Math.max(MIN_DURATION_SECONDS, Math.round(seconds)));
+}
+
 export const DEFAULT_BACKEND_URL = 'https://obd-murex.vercel.app/api';
 
 export const BASELINE_DIAGNOSTIC_PLAN: DiagnosticPlan = {
@@ -64,7 +77,7 @@ function sanitizePlan(value: unknown): DiagnosticPlan {
     title: typeof candidate.title === 'string' ? candidate.title : 'Test dobrany przez AI',
     reason: typeof candidate.reason === 'string' ? candidate.reason : '',
     pids,
-    durationSeconds: Math.min(300, Math.max(15, Number(candidate.durationSeconds) || 60)),
+    durationSeconds: clampDuration(Number(candidate.durationSeconds) || 60),
   };
 }
 

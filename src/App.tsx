@@ -9,7 +9,7 @@ import { Terminal } from './components/Terminal';
 import { obdBluetooth } from './services/obdBluetooth';
 import {
   ALLOWED_LIVE_PIDS, BASELINE_DIAGNOSTIC_PLAN, DEFAULT_BACKEND_URL,
-  checkBackend, requestChat, requestDiagnosis, requestDiagnosticPlan,
+  checkBackend, clampDuration, requestChat, requestDiagnosis, requestDiagnosticPlan,
 } from './services/diagnosticPlanner';
 import type { BackendHealth } from './services/diagnosticPlanner';
 import {
@@ -59,6 +59,7 @@ export default function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_KEY) || '');
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthError, setHealthError] = useState('');
+  const [checkingBackend, setCheckingBackend] = useState(false);
 
   const [session, setSession] = useState<ObdSession | null>(loadSession);
   const [report, setReport] = useState<DiagnosisReport | null>(null);
@@ -343,15 +344,26 @@ export default function App() {
     }
   };
 
-  const verifyBackend = async () => {
+  const verifyBackend = useCallback(async () => {
     setHealthError('');
     setHealth(null);
+    setCheckingBackend(true);
     try {
       setHealth(await checkBackend(endpoint, token));
     } catch (error) {
       setHealthError(formatError(error));
+    } finally {
+      setCheckingBackend(false);
     }
-  };
+  }, [endpoint, token]);
+
+  // Stan usługi AI sprawdzamy sami, po starcie i po zmianie adresu lub tokenu.
+  // Wcześniej trzeba było rozwinąć ustawienia i kliknąć — czyli w praktyce
+  // nikt nie wiedział, czy analiza w ogóle zadziała, aż do pierwszej próby.
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void verifyBackend(); }, 400);
+    return () => window.clearTimeout(timer);
+  }, [verifyBackend]);
 
   const analyzeSession = async () => {
     if (!session) return;
@@ -451,8 +463,10 @@ export default function App() {
             onConditionsChange={setConditions}
             onEndpointChange={setEndpoint}
             onTokenChange={setToken}
+            checkingBackend={checkingBackend}
             onCheckBackend={() => void verifyBackend()}
             onRequest={() => void createDiagnosticPlan()}
+            onDurationChange={(durationSeconds) => setDiagnosticPlan((current) => ({ ...current, durationSeconds: clampDuration(durationSeconds) }))}
           />
           <LiveDataPanel batch={liveBatch} enabled={connectionState === 'ready' && !busy} running={liveRunning} onToggle={() => { if (liveRunning) stopLiveData('Live Data zatrzymane ręcznie.'); else void startLiveData(); }} />
           <SessionReportPanel
