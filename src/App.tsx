@@ -73,6 +73,7 @@ export default function App() {
   const sessionRef = useRef<ObdSession | null>(session);
   const labelsRef = useRef(new Map<string, { label: string; unit: string }>());
   const drainedRef = useRef(0);
+  const bitmapWarningShown = useRef(false);
 
   const addLine = useCallback((direction: TerminalLine['direction'], text: string) => {
     setLines((current) => [...current.slice(-1999), { id: nextLineId.current++, direction, text, timestamp: new Date() }]);
@@ -240,6 +241,11 @@ export default function App() {
     const values = last.readings.map((reading) => `${reading.pid}=${reading.formatted}`).join(' | ');
     const skipped = batches.length > 1 ? ` (+${batches.length - 1} z tła)` : '';
     addLine('rx', `LIVE · ${values || 'brak danych'} · ${speed} PID/s${skipped}`);
+
+    if (last.ignoredSupportBitmap && !bitmapWarningShown.current) {
+      bitmapWarningShown.current = true;
+      addLine('info', 'Bitmapa obsługiwanych PID-ów nie pokryła planu — odpytuję plan mimo to (nadal wyłącznie odczyt).');
+    }
   }, [addLine]);
 
   /** Odpytuje rejestrator co sekundę. Uśpienie tej pętli w tle nie gubi danych. */
@@ -285,6 +291,7 @@ export default function App() {
 
     const startedAtMs = Date.now();
     drainedRef.current = 0;
+    bitmapWarningShown.current = false;
     sessionRef.current = createSession(diagnosticPlan, symptoms.trim(), conditions);
     setSession(sessionRef.current);
     setReport(null);
@@ -294,7 +301,18 @@ export default function App() {
 
     try {
       await obdBluetooth.resetRecording();
-      await obdBluetooth.startRecording(diagnosticPlan.pids, diagnosticPlan.durationSeconds, diagnosticPlan.title);
+      const started = await obdBluetooth.startRecording(diagnosticPlan.pids, diagnosticPlan.durationSeconds, diagnosticPlan.title);
+
+      // Surowe bitmapy trafiają do dziennika — bez nich cichy brak danych jest
+      // nie do zdiagnozowania po fakcie.
+      for (const item of started.detection ?? []) {
+        addLine('tx', item.command);
+        addLine('rx', item.response.trim() || '(pusta odpowiedź)');
+      }
+      if (started.detectionError) addLine('error', `Wykrywanie PID-ów: ${started.detectionError}`);
+      if (typeof started.supportedCount === 'number') {
+        addLine('info', `Auto zgłosiło ${started.supportedCount} obsługiwanych PID-ów.`);
+      }
     } catch (error) {
       liveRunId.current += 1;
       setLiveRunning(false);

@@ -148,8 +148,7 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
             try {
                 BluetoothDevice device = adapter.getRemoteDevice(address);
                 adapter.cancelDiscovery();
-                BluetoothSocket newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-                newSocket.connect();
+                BluetoothSocket newSocket = openSocket(device);
                 synchronized (ioLock) {
                     socket = newSocket;
                     input = newSocket.getInputStream();
@@ -164,6 +163,39 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
                 call.reject("Nie udało się połączyć z ELM327: " + safeMessage(error), error);
             }
         });
+    }
+
+    /**
+     * Standardowe gniazdo SPP, a przy niepowodzeniu obejście przez refleksję na
+     * kanale 1. Tanie klony ELM327 często odrzucają pierwsze podejście błędem
+     * "read failed, socket might closed or timeout, read ret: -1", zwłaszcza
+     * krótko po zamknięciu poprzedniego połączenia.
+     */
+    private BluetoothSocket openSocket(BluetoothDevice device) throws IOException {
+        try {
+            BluetoothSocket socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
+            socket.connect();
+            return socket;
+        } catch (IOException firstAttempt) {
+            // Adapter potrzebuje chwili po odrzuconym połączeniu; 18 ms z
+            // sleepBriefly() to za mało dla stosu Bluetooth.
+            try { Thread.sleep(600); } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw firstAttempt;
+            }
+            try {
+                BluetoothSocket fallback = (BluetoothSocket) device.getClass()
+                    .getMethod("createRfcommSocket", int.class)
+                    .invoke(device, 1);
+                if (fallback == null) throw firstAttempt;
+                fallback.connect();
+                return fallback;
+            } catch (IOException retryFailed) {
+                throw retryFailed;
+            } catch (Exception reflectionFailed) {
+                throw firstAttempt;
+            }
+        }
     }
 
     @PluginMethod
@@ -313,15 +345,30 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
         long startedAt = android.os.SystemClock.elapsedRealtime();
         if (supportedPids.isEmpty()) detectSupportedPids();
 
-        JSArray readings = new JSArray();
+        // Katalog bezpiecznych PID-ów przecięty z planem — to jest warstwa
+        // bezpieczeństwa i obowiązuje zawsze.
+        List<String[]> targets = new ArrayList<>();
         for (String[] definition : LIVE_PID_DEFINITIONS) {
-            String command = definition[0];
-            if (!requestedPids.isEmpty() && !requestedPids.contains(command)) continue;
-            int pid = Integer.parseInt(command.substring(2), 16);
-            if (!supportedPids.contains(pid)) continue;
+            if (requestedPids.isEmpty() || requestedPids.contains(definition[0])) targets.add(definition);
+        }
+
+        // Bitmapa obsługiwanych PID-ów to optymalizacja, nie zabezpieczenie.
+        // Jeżeli auto zgłosiło bitmapę, z której nie wychodzi ani jeden PID
+        // z planu, odpytujemy plan mimo wszystko — zapytanie trybu 01 jest
+        // tylko odczytem, a ECU po prostu odpowie NO DATA. Wcześniej błędnie
+        // odczytana bitmapa cicho zamieniała cały pomiar w zero próbek.
+        List<String[]> supportedTargets = new ArrayList<>();
+        for (String[] definition : targets) {
+            if (supportedPids.contains(Integer.parseInt(definition[0].substring(2), 16))) supportedTargets.add(definition);
+        }
+        boolean ignoredSupportBitmap = supportedTargets.isEmpty() && !targets.isEmpty();
+        List<String[]> toRead = ignoredSupportBitmap ? targets : supportedTargets;
+
+        JSArray readings = new JSArray();
+        for (String[] definition : toRead) {
             try {
-                String raw = exchange(command, 1800);
-                addLiveReading(readings, command, definition[1], raw);
+                String raw = exchange(definition[0], 1800);
+                addLiveReading(readings, definition[0], definition[1], raw);
             } catch (IOException ignored) {
                 // Pojedynczy brak odpowiedzi nie przerywa całej paczki Live Data.
             }
@@ -331,6 +378,8 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
         result.put("timestamp", System.currentTimeMillis());
         result.put("durationMs", android.os.SystemClock.elapsedRealtime() - startedAt);
         result.put("supportedCount", supportedPids.size());
+        result.put("requestedCount", toRead.size());
+        result.put("ignoredSupportBitmap", ignoredSupportBitmap);
         result.put("readings", readings);
         return result;
     }
@@ -351,10 +400,22 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
         int durationSeconds = call.getInt("durationSeconds", 60);
         String planTitle = call.getString("planTitle", "Pomiar OBD");
 
+        // Świeże wykrycie przed każdym pomiarem. Wcześniej bitmapa była
+        // zapamiętywana na czas życia pluginu, więc jedno błędne odczytanie
+        // psuło wszystkie kolejne pomiary aż do restartu aplikacji.
+        JSObject result = ObdRecorder.status();
+        try {
+            supportedPids.clear();
+            result.put("detection", detectSupportedPids());
+            result.put("supportedCount", supportedPids.size());
+        } catch (Exception error) {
+            result.put("detectionError", safeMessage(error));
+        }
+
         ObdRecordingService.start(getContext(), planTitle, durationSeconds);
         ObdRecorder.start(getContext(), this, pids, durationSeconds);
         applyKeepAwake(true);
-        call.resolve(ObdRecorder.status());
+        call.resolve(result);
     }
 
     @PluginMethod
@@ -436,23 +497,40 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
         readings.put(reading);
     }
 
-    private void detectSupportedPids() throws IOException {
+    /** @return surowe odpowiedzi na zapytania o bitmapy, do wglądu w dzienniku */
+    private JSArray detectSupportedPids() throws IOException {
+        JSArray trace = new JSArray();
         supportedPids.clear();
-        addSupportedRange(0x00, exchange("0100", 3500));
-        if (supportedPids.contains(0x20)) addSupportedRange(0x20, exchange("0120", 3500));
-        if (supportedPids.contains(0x40)) addSupportedRange(0x40, exchange("0140", 3500));
+        for (String command : new String[] { "0100", "0120", "0140" }) {
+            if (command.equals("0120") && !supportedPids.contains(0x20)) break;
+            if (command.equals("0140") && !supportedPids.contains(0x40)) break;
+            String raw = exchange(command, 3500);
+            addSupportedRange(Integer.parseInt(command.substring(2), 16), raw);
+            JSObject item = new JSObject();
+            item.put("command", command);
+            item.put("response", raw);
+            trace.put(item);
+        }
+        return trace;
     }
 
+    /**
+     * Sumuje bitmapy ze WSZYSTKICH modułów, które odpowiedziały. Wcześniej brana
+     * była tylko pierwsza ramka, przez co przy kilku ECU lista obsługiwanych
+     * PID-ów wychodziła szczątkowa i Live Data nie odpytywało niczego.
+     */
     private void addSupportedRange(int basePid, String raw) {
         String responsePid = String.format(Locale.US, "%02X", basePid);
-        List<Integer> data = extractPidData(raw, responsePid);
-        if (data.size() < 4) return;
-        long bitmap = ((long) data.get(0) << 24)
-            | ((long) data.get(1) << 16)
-            | ((long) data.get(2) << 8)
-            | data.get(3);
-        for (int bit = 0; bit < 32; bit++) {
-            if ((bitmap & (1L << (31 - bit))) != 0) supportedPids.add(basePid + bit + 1);
+        for (String line : responseLines(raw)) {
+            List<Integer> data = extractPidDataFromLine(line, responsePid);
+            if (data.size() < 4) continue;
+            long bitmap = ((long) data.get(0) << 24)
+                | ((long) data.get(1) << 16)
+                | ((long) data.get(2) << 8)
+                | data.get(3);
+            for (int bit = 0; bit < 32; bit++) {
+                if ((bitmap & (1L << (31 - bit))) != 0) supportedPids.add(basePid + bit + 1);
+            }
         }
     }
 
@@ -503,7 +581,33 @@ public class BluetoothSerialPlugin extends Plugin implements ObdRecorder.Sampler
         return !extractPidData(raw, pid).isEmpty();
     }
 
+    /**
+     * Rozbija odpowiedź ELM na pojedyncze ramki. Przy CAN odpowiada zwykle
+     * kilka modułów (7E8, 7E9…), a każdy w osobnej linii. Sklejanie ich w jeden
+     * ciąg powodowało, że parser brał bajty z sąsiedniej ramki.
+     */
+    private List<String> responseLines(String raw) {
+        List<String> lines = new ArrayList<>();
+        if (raw == null) return lines;
+        for (String line : raw.split("[\r\n]+")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.equals(">")) continue;
+            lines.add(trimmed);
+        }
+        if (lines.isEmpty() && raw.trim().length() > 0) lines.add(raw.trim());
+        return lines;
+    }
+
+    /** Pierwsza ramka, która niesie dane dla tego PID-u. */
     private List<Integer> extractPidData(String raw, String pid) {
+        for (String line : responseLines(raw)) {
+            List<Integer> data = extractPidDataFromLine(line, pid);
+            if (!data.isEmpty()) return data;
+        }
+        return new ArrayList<>();
+    }
+
+    private List<Integer> extractPidDataFromLine(String raw, String pid) {
         String normalized = raw.toUpperCase(Locale.US).replaceAll("[^0-9A-F]", " ").trim();
         String[] tokens = normalized.isEmpty() ? new String[0] : normalized.split("\\s+");
         List<Integer> bytes = new ArrayList<>();

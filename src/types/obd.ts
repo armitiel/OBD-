@@ -39,6 +39,9 @@ export interface LiveDataBatch {
   durationMs: number;
   supportedCount: number;
   readings: LiveReading[];
+  requestedCount?: number;
+  /** true, gdy bitmapa auta nie pokryła planu i odpytano go mimo to. */
+  ignoredSupportBitmap?: boolean;
 }
 
 export interface DiagnosticPlan {
@@ -124,4 +127,8 @@ export interface RecordingStatus {
   plannedMs: number;
   error?: string;
   stopReason?: string;
+  /** Surowe odpowiedzi na zapytania o bitmapy obsługiwanych PID-ów. */
+  detection?: { command: string; response: string }[];
+  detectionError?: string;
+  supportedCount?: number;
 }
